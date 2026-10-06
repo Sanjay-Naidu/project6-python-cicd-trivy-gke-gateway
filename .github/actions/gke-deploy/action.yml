@@ -1,0 +1,196 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : .github/actions/gke-deploy/action.yml - deploy one environment
+# =============================================================================
+# A composite action: the dev and prod jobs run EXACTLY the same deploy
+# steps with different inputs, so a fix to the deploy logic can't be applied
+# to one environment and forgotten in the other.
+#
+#   auth (OIDC) -> kubeconfig (DNS endpoint) -> preflight -> render
+#   -> server-side dry run -> apply -> wait for rollout (auto-undo on failure)
+#   -> verify the PUBLIC URL serves the new version
+
+name: GKE deploy
+description: Render the Kustomize overlay for one environment and roll it out to GKE
+
+inputs:
+  environment:
+    description: dev or prod (selects k8s/overlays/<environment> and namespace medicart-<environment>)
+    required: true
+  app-image:
+    description: Full app image reference with its sha- tag
+    required: true
+  app-version:
+    description: The sha- tag alone
+    required: true
+  postgres-image:
+    description: Full postgres image reference (through the Artifact Registry mirror)
+    required: true
+  hostname:
+    description: Public hostname for this environment (vars.APP_HOSTNAME)
+    required: true
+  public-scheme:
+    description: http or https (vars.PUBLIC_SCHEME)
+    required: false
+    default: http
+  gcp-project-id:
+    required: true
+  wif-provider:
+    required: true
+  deploy-sa:
+    required: true
+  cluster:
+    required: true
+  location:
+    required: true
+  verify-attempts:
+    description: Public URL checks, 15s apart (the first-ever deploy waits for Google to build the LB)
+    required: false
+    default: "60"
+
+outputs:
+  url:
+    description: Public URL of the environment
+    value: ${{ steps.verify.outputs.url }}
+
+runs:
+  using: composite
+  steps:
+    - name: Authenticate to Google Cloud (OIDC - no keys)
+      uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+      with:
+        workload_identity_provider: ${{ inputs.wif-provider }}
+        service_account: ${{ inputs.deploy-sa }}
+
+    - name: Get GKE credentials (DNS-based control plane endpoint)
+      uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
+      with:
+        cluster_name: ${{ inputs.cluster }}
+        location: ${{ inputs.location }}
+        # GitHub-hosted runners have no fixed egress IP to put in the control
+        # plane's authorized networks. The DNS endpoint is reachable from
+        # anywhere but authorised by IAM only - see README "What broke".
+        use_dns_based_endpoint: true
+
+    # The pipeline deploys INTO namespaces; it doesn't create them. If the
+    # platform layer is missing, say exactly what to do instead of failing
+    # later with a confusing RBAC or CRD error.
+    - name: Preflight - platform layer present
+      shell: bash
+      env:
+        NS: medicart-${{ inputs.environment }}
+      run: |
+        if ! kubectl get namespace "$NS" >/dev/null 2>&1; then
+          echo "::error::Namespace $NS not found. Apply the platform layer first: docs/SETUP.md, Phase 11."
+          exit 1
+        fi
+        echo "namespace $NS OK"
+
+    - name: Render manifests
+      shell: bash
+      env:
+        GCP_PROJECT_ID: ${{ inputs.gcp-project-id }}
+        APP_HOSTNAME: ${{ inputs.hostname }}
+        APP_IMAGE: ${{ inputs.app-image }}
+        APP_VERSION: ${{ inputs.app-version }}
+        POSTGRES_IMAGE: ${{ inputs.postgres-image }}
+        PUBLIC_SCHEME: ${{ inputs.public-scheme }}
+      run: |
+        mkdir -p rendered
+        bash k8s/render.sh "${{ inputs.environment }}" > "rendered/${{ inputs.environment }}.yaml"
+        echo "rendered $(grep -c '^kind:' "rendered/${{ inputs.environment }}.yaml") objects"
+
+    # Keep exactly what was applied, per run: "what changed in prod on
+    # Tuesday?" is answered by diffing two artifacts.
+    - name: Upload rendered manifests
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: manifests-${{ inputs.environment }}-${{ inputs.app-version }}
+        path: rendered/${{ inputs.environment }}.yaml
+        retention-days: 90
+
+    # The API server validates everything (schemas, CRDs, Pod Security
+    # "restricted", immutable fields) WITHOUT changing anything. A bad
+    # manifest fails here, before any object is touched.
+    - name: Server-side dry run
+      shell: bash
+      run: |
+        kubectl apply --server-side --field-manager=github-actions --force-conflicts \
+          --dry-run=server -f "rendered/${{ inputs.environment }}.yaml"
+
+    # --server-side: the API server tracks which fields each manager owns.
+    # --force-conflicts: git is the source of truth. If someone hand-edited
+    # a field with kubectl, the pipeline takes it back.
+    - name: Apply
+      shell: bash
+      run: |
+        kubectl apply --server-side --field-manager=github-actions --force-conflicts \
+          -f "rendered/${{ inputs.environment }}.yaml"
+
+    # Database first (the app's init container waits for it anyway), then
+    # the app. If the app rollout doesn't complete (crash loop, failed
+    # migration, failing probes), roll back to the previous ReplicaSet so the
+    # environment keeps serving the last good version.
+    - name: Wait for rollout (auto-undo on failure)
+      shell: bash
+      env:
+        NS: medicart-${{ inputs.environment }}
+      run: |
+        diagnose() {
+          echo "::group::diagnostics"
+          kubectl -n "$NS" get pods -o wide || true
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -30 || true
+          for pod in $(kubectl -n "$NS" get pods -l app.kubernetes.io/name=medicart -o name); do
+            kubectl -n "$NS" logs "$pod" -c migrate --tail=50 || true
+            kubectl -n "$NS" logs "$pod" -c medicart --tail=50 || true
+          done
+          echo "::endgroup::"
+        }
+        if ! kubectl -n "$NS" rollout status statefulset/postgres --timeout=10m; then
+          echo "::error::postgres did not become ready"; diagnose; exit 1
+        fi
+        if ! kubectl -n "$NS" rollout status deployment/medicart --timeout=10m; then
+          echo "::error::medicart rollout failed - rolling back to the previous version"
+          diagnose
+          kubectl -n "$NS" rollout undo deployment/medicart || true
+          kubectl -n "$NS" rollout status deployment/medicart --timeout=5m || true
+          exit 1
+        fi
+        kubectl -n "$NS" get pods,svc,httproute,pvc -o wide
+
+    # "Healthy inside the cluster" and "reachable from the internet" are
+    # different claims. This goes through DNS, the Google load balancer,
+    # Cloud Armor and the HTTPRoute, and passes only when the public URL
+    # serves the version that was just deployed.
+    - name: Verify through the public load balancer
+      id: verify
+      shell: bash
+      env:
+        URL: ${{ inputs.public-scheme }}://${{ inputs.hostname }}
+        EXPECTED: ${{ inputs.app-version }}
+        ATTEMPTS: ${{ inputs.verify-attempts }}
+        NS: medicart-${{ inputs.environment }}
+      run: |
+        echo "url=$URL/" >> "$GITHUB_OUTPUT"
+        for i in $(seq 1 "$ATTEMPTS"); do
+          VERSION=$(curl -fsSL --max-time 5 "$URL/api/info" 2>/dev/null | jq -r '.version' 2>/dev/null || true)
+          if [ "$VERSION" = "$EXPECTED" ]; then
+            echo "$URL is serving $VERSION"
+            {
+              echo "### MediCart ${{ inputs.environment }} is live"
+              echo ""
+              echo "| | |"
+              echo "|---|---|"
+              echo "| URL | $URL/ |"
+              echo "| Version | \`$VERSION\` |"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "attempt $i/$ATTEMPTS: $URL not serving $EXPECTED yet (got: ${VERSION:-no response})"
+          sleep 15
+        done
+        echo "::error::$URL never served $EXPECTED"
+        kubectl -n "$NS" describe httproute medicart || true
+        kubectl -n gateway-infra describe gateway medicart-gateway || true
+        exit 1

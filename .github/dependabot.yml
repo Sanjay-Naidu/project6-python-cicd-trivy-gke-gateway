@@ -1,0 +1,33 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : .github/dependabot.yml - automated dependency updates
+# =============================================================================
+# Every bump arrives as a PR and must pass the full PR Validation pipeline
+# (tests + Trivy) before it can merge. Weekly + grouped keeps the noise low.
+version: 2
+updates:
+  # Python dependencies: updates pyproject.toml AND re-locks uv.lock.
+  - package-ecosystem: uv
+    directory: /app
+    schedule:
+      interval: weekly
+    groups:
+      python-minor-patch:
+        update-types: [minor, patch]
+
+  # Base images in the Dockerfile (tag and digest are bumped together).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Actions are pinned to commit SHAs; Dependabot updates the SHA and the
+  # version comment together.
+  - package-ecosystem: github-actions
+    directories: ["/", "/.github/actions/*"]
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

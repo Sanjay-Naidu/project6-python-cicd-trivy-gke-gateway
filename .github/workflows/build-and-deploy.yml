@@ -1,0 +1,232 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : .github/workflows/build-and-deploy.yml - main CI/CD pipeline
+# =============================================================================
+# Flow on every merge to main:
+#   quality -> build + Trivy scan + SBOM -> push to Artifact Registry
+#           -> deploy DEV (auto) + public URL check
+#           -> deploy PROD (manual approval via the 'prod' GitHub environment)
+#              + public URL check
+#
+# Auth: google-github-actions/auth uses Workload Identity Federation. GitHub
+# gives each run a short-lived signed OIDC token; Google verifies it came
+# from THIS repository and exchanges it for a 1-hour token of the deployer
+# service account. No service account key exists anywhere.
+#
+# Decommission-safe: if the GCP_PROJECT_ID variable is empty (platform torn
+# down), the image is still built and scanned, but push/deploy are skipped,
+# so the pipeline stays green instead of failing against deleted resources.
+
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "scripts/**"
+      - "platform/**" # platform changes are applied by an admin, not CI
+  workflow_dispatch: {} # manual re-run button
+
+# One pipeline at a time; never cancel a deployment mid-flight.
+concurrency:
+  group: build-deploy-main
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # required to request the GitHub OIDC token
+
+env:
+  IMAGE_NAME: medicart
+  # The database image, pinned by tag AND digest, in one place. It's pulled
+  # through the Artifact Registry remote repository (a Docker Hub mirror),
+  # because the private nodes have no internet access.
+  POSTGRES_IMAGE_REF: library/postgres:18.6-alpine3.24@sha256:77f585114c32fbca283dc835b0596f4e52b51b4c6662d7810b2f4084f60a1873
+
+jobs:
+  quality:
+    name: Code quality
+    uses: ./.github/workflows/reusable-quality.yml
+
+  build-scan-push:
+    name: Build, scan, push to Artifact Registry
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: quality
+    outputs:
+      image: ${{ steps.meta.outputs.repo }}:${{ steps.meta.outputs.tag }}
+      tag: ${{ steps.meta.outputs.tag }}
+      postgres_image: ${{ steps.meta.outputs.postgres }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Immutable tag from the commit SHA: every image maps 1:1 to a commit,
+      # so "what is running in prod?" has an exact answer, and so do rollbacks.
+      - name: Compute image references
+        id: meta
+        run: |
+          AR="${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}"
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "repo=$AR/${{ vars.GAR_REPOSITORY }}/${{ env.IMAGE_NAME }}" >> "$GITHUB_OUTPUT"
+          echo "postgres=$AR/${{ vars.GAR_DOCKERHUB_REMOTE }}/${{ env.POSTGRES_IMAGE_REF }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image
+        run: |
+          docker build \
+            --label org.opencontainers.image.revision=${GITHUB_SHA} \
+            -t ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} .
+
+      # The app must import inside the real distroless image: catches an
+      # interpreter/venv mismatch before anything is pushed.
+      - name: Image smoke test
+        run: |
+          docker run --rm --entrypoint /app/.venv/bin/python \
+            ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }} \
+            -c "import medicart.main, medicart.migrate; print('image OK')"
+
+      # Gate BEFORE push: a vulnerable image never reaches the registry.
+      - name: Trivy image scan (blocking)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: "1"
+
+      # We don't build PostgreSQL, so we can't patch it, but we should still
+      # KNOW what's in it. Report-only; findings go to the job summary, and
+      # the fix is bumping POSTGRES_IMAGE_REF when upstream publishes a patch.
+      - name: Trivy scan of the PostgreSQL image (report only)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: docker.io/${{ env.POSTGRES_IMAGE_REF }}
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          format: table
+          output: trivy-postgres.txt
+          exit-code: "0"
+          skip-setup-trivy: true
+
+      - name: Postgres scan summary
+        if: always()
+        run: |
+          {
+            echo "### Trivy: PostgreSQL image (report only)"
+            echo '```'
+            cat trivy-postgres.txt 2>/dev/null | tail -40 || echo "no report"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # SBOM = the image's ingredient list. When the next Log4Shell-style CVE
+      # lands, "are we affected?" is a search, not an investigation.
+      - name: Generate SBOM (CycloneDX)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.tag }}
+          format: cyclonedx
+          output: sbom.cdx.json
+          skip-setup-trivy: true
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-${{ steps.meta.outputs.tag }}
+          path: sbom.cdx.json
+          retention-days: 90
+
+      - name: Authenticate to Google Cloud (OIDC - no keys)
+        if: vars.GCP_PROJECT_ID != ''
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - name: Set up gcloud
+        if: vars.GCP_PROJECT_ID != ''
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
+
+      # The repo has immutable tags, so re-running the pipeline for the same
+      # commit must not try to overwrite sha-xxxxxxx: it reuses the image
+      # that was already scanned and pushed.
+      - name: Push to Artifact Registry
+        if: vars.GCP_PROJECT_ID != ''
+        env:
+          REPO: ${{ steps.meta.outputs.repo }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+          if gcloud artifacts docker images describe "$REPO:$TAG" >/dev/null 2>&1; then
+            echo "$REPO:$TAG already exists (immutable) - reusing it"
+          else
+            docker tag "${{ env.IMAGE_NAME }}:$TAG" "$REPO:$TAG"
+            docker push "$REPO:$TAG"
+          fi
+          echo "### Image" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`$REPO:$TAG\`" >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-dev:
+    name: Deploy to DEV
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: build-scan-push
+    if: vars.GCP_PROJECT_ID != ''
+    # APP_HOSTNAME and PUBLIC_SCHEME are ENVIRONMENT variables: each GitHub
+    # environment (dev, prod) holds its own value under the same name.
+    environment:
+      name: dev
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Deploy
+        id: deploy
+        uses: ./.github/actions/gke-deploy
+        with:
+          environment: dev
+          app-image: ${{ needs.build-scan-push.outputs.image }}
+          app-version: ${{ needs.build-scan-push.outputs.tag }}
+          postgres-image: ${{ needs.build-scan-push.outputs.postgres_image }}
+          hostname: ${{ vars.APP_HOSTNAME }}
+          public-scheme: ${{ vars.PUBLIC_SCHEME || 'http' }}
+          gcp-project-id: ${{ vars.GCP_PROJECT_ID }}
+          wif-provider: ${{ vars.GCP_WIF_PROVIDER }}
+          deploy-sa: ${{ vars.GCP_DEPLOY_SA }}
+          cluster: ${{ vars.GKE_CLUSTER }}
+          location: ${{ vars.GKE_LOCATION }}
+
+  deploy-prod:
+    name: Deploy to PROD (requires approval)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [build-scan-push, deploy-dev]
+    if: vars.GCP_PROJECT_ID != ''
+    # The 'prod' environment has a required reviewer: the pipeline PAUSES
+    # here until approved. The EXACT image verified in dev is promoted;
+    # nothing is rebuilt.
+    environment:
+      name: prod
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Deploy
+        id: deploy
+        uses: ./.github/actions/gke-deploy
+        with:
+          environment: prod
+          app-image: ${{ needs.build-scan-push.outputs.image }}
+          app-version: ${{ needs.build-scan-push.outputs.tag }}
+          postgres-image: ${{ needs.build-scan-push.outputs.postgres_image }}
+          hostname: ${{ vars.APP_HOSTNAME }}
+          public-scheme: ${{ vars.PUBLIC_SCHEME || 'http' }}
+          gcp-project-id: ${{ vars.GCP_PROJECT_ID }}
+          wif-provider: ${{ vars.GCP_WIF_PROVIDER }}
+          deploy-sa: ${{ vars.GCP_DEPLOY_SA }}
+          cluster: ${{ vars.GKE_CLUSTER }}
+          location: ${{ vars.GKE_LOCATION }}

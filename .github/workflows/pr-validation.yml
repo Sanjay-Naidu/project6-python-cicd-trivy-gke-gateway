@@ -1,0 +1,91 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : .github/workflows/pr-validation.yml - CI gate for pull requests
+# =============================================================================
+# Runs on every PR to main. Nothing is pushed or deployed from here, and no
+# cloud credentials are requested. The goal is fast, safe feedback:
+#   - ruff lint/format + pytest against real PostgreSQL + coverage gate
+#   - Kustomize render + kubeconform schema validation
+#   - Trivy config scan (Dockerfile, Kubernetes YAML) -> GitHub Security tab
+#   - full image build with a BLOCKING Trivy vulnerability scan
+
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+
+# A new push to the same PR cancels the previous (still-running) validation.
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write # SARIF upload to the GitHub Security tab
+
+jobs:
+  quality:
+    name: Code quality
+    uses: ./.github/workflows/reusable-quality.yml
+
+  trivy-config:
+    name: Trivy - misconfiguration scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Scans the Dockerfile and every Kubernetes manifest for
+      # misconfigurations. exit-code 0 = report-only: findings land in the
+      # Security tab for triage (some are deliberate, e.g. no CPU limits).
+      # The IMAGE scan below IS blocking.
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          format: sarif
+          output: trivy-config.sarif
+          exit-code: "0"
+
+      - name: Upload findings to Security tab
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        if: always()
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+  image-build-scan:
+    name: Docker build + Trivy image scan (blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: docker build -t medicart:pr-${{ github.event.pull_request.number }} .
+
+      # Smoke test the image itself: it must import, and the distroless
+      # interpreter must match the venv (a mismatch fails right here).
+      - name: Image smoke test
+        run: |
+          docker run --rm --entrypoint /app/.venv/bin/python \
+            medicart:pr-${{ github.event.pull_request.number }} \
+            -c "import medicart.main, medicart.migrate; print('image OK')"
+
+      # BLOCKING: a HIGH/CRITICAL vulnerability with an available fix fails
+      # the PR. ignore-unfixed skips vulns with no patched version yet, since
+      # failing on those would only block merges with nothing to do.
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: image
+          image-ref: medicart:pr-${{ github.event.pull_request.number }}
+          scanners: vuln,secret
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: "1"
