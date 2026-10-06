@@ -1,0 +1,13 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : .dockerignore - keep the build context small and secret-free
+# =============================================================================
+# Allow-list style: ignore everything, then re-include only what the
+# Dockerfile COPYs. A stray .env or key file can never end up in an image.
+*
+!app/pyproject.toml
+!app/uv.lock
+!app/src/**
+**/__pycache__
+**/*.pyc

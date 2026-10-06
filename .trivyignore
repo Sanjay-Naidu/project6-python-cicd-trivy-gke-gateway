@@ -1,0 +1,14 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : .trivyignore - documented, time-boxed vulnerability exceptions
+# =============================================================================
+# Empty on purpose. The image scan blocks on HIGH/CRITICAL findings that have
+# a fix available. If a finding ever has to be accepted, it goes here with:
+#   - the CVE id
+#   - WHY it is not exploitable in this app (or why no fix is possible)
+#   - an expiry date to re-check
+# Example:
+#   # starlette multipart DoS; request bodies are capped by the LB and
+#   # Cloud Armor. Re-check by 2026-12-31.
+#   CVE-0000-00000
