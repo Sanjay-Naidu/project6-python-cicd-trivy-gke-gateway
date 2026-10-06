@@ -1,0 +1,23 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/base/postgres-service.yaml - headless Service for the StatefulSet
+# =============================================================================
+# clusterIP: None ("headless"): DNS for `postgres` resolves straight to the
+# pod IP, and gives the pod its stable name postgres-0.postgres. It's the
+# StatefulSet's governing Service (spec.serviceName). Only reachable inside
+# the cluster, and NetworkPolicy narrows that to the app pods.
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

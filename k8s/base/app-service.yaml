@@ -1,0 +1,25 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/base/app-service.yaml
+# =============================================================================
+# ClusterIP only: nothing is exposed directly. Public traffic arrives through
+# the Gateway, whose load balancer sends it straight to pod IPs via network
+# endpoint groups (NEGs, which GKE creates automatically for Services that an
+# HTTPRoute references). Only port 8080 is published; metrics on 9090 stay
+# private.
+apiVersion: v1
+kind: Service
+metadata:
+  name: medicart
+  labels:
+    app.kubernetes.io/name: medicart
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: medicart
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

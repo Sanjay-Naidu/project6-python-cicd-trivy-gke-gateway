@@ -1,0 +1,32 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/base/app-httproute.yaml - attach this environment to the Gateway
+# =============================================================================
+# Cross-namespace attachment: the route lives in medicart-dev/-prod, the
+# Gateway in gateway-infra. The Gateway only accepts it because this
+# namespace carries the gateway-access=true label (platform/00-namespaces.yaml).
+#
+# No sectionName on purpose: the route attaches to whichever listener allows
+# it. HTTP-only stage: the http listener. HTTPS stage: only https, while
+# plain HTTP gets the platform's 301 redirect.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: medicart
+  labels:
+    app.kubernetes.io/name: medicart
+spec:
+  parentRefs:
+    - name: medicart-gateway
+      namespace: gateway-infra
+  hostnames:
+    - "${APP_HOSTNAME}"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: medicart
+          port: 80

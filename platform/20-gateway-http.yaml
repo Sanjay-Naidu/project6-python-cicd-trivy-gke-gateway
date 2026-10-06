@@ -1,0 +1,45 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : platform/20-gateway-http.yaml - shared Gateway, HTTP only (stage 1)
+# =============================================================================
+# Gateway API splits the old Ingress object in two:
+#   Gateway   (this file, platform-owned): the load balancer, its IP, ports
+#             and certificates, and WHO may attach routes to it.
+#   HTTPRoute (k8s/base/app-httproute.yaml, app-owned): which hostnames and
+#             paths go to which Service.
+# One Gateway = one Google load balancer, shared by dev AND prod through
+# host-based routing: dev.<domain> -> medicart-dev, <domain> -> medicart-prod.
+# With Ingress that would have been two load balancers (~$18/month each).
+#
+# gke-l7-global-external-managed = Google's global external Application
+# Load Balancer (the Envoy-based generation, which supports Cloud Armor,
+# advanced traffic management and per-backend policies).
+#
+# Stages 2-3 (HTTPS) replace this file with 21-gateway-https.yaml and then
+# 22-gateway-https-redirect.yaml. The app's
+# HTTPRoutes don't change.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: medicart-gateway
+  namespace: gateway-infra
+  labels:
+    app.kubernetes.io/part-of: medicart
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  addresses:
+    # The global static IP you reserved in the console (VPC network -> IP
+    # addresses). The public address survives Gateway re-creation.
+    - type: NamedAddress
+      value: medicart-ip
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              gateway-access: "true"

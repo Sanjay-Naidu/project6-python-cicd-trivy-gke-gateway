@@ -1,0 +1,50 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/base/kustomization.yaml - everything both environments share
+# =============================================================================
+# Kustomize instead of Helm: plain Kubernetes YAML, no template language.
+# Overlays (k8s/overlays/dev|prod) PATCH this base with environment
+# differences. `kubectl kustomize` is built into kubectl, so there's nothing
+# extra to install.
+#
+# A few values are only known at deploy time (project id, image tag,
+# hostname). They appear as ${VARS} and are filled in by k8s/render.sh with
+# an explicit allow-list, which then fails if any ${...} is left over.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: medicart
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
+    includeTemplates: true
+
+resources:
+  - networkpolicies.yaml
+  - postgres-serviceaccount.yaml
+  - postgres-secretproviderclass.yaml
+  - postgres-statefulset.yaml
+  - postgres-service.yaml
+  - app-serviceaccount.yaml
+  - app-secretproviderclass.yaml
+  - app-deployment.yaml
+  - app-service.yaml
+  - app-httproute.yaml
+  - app-gateway-policies.yaml
+
+# Non-secret settings. Kustomize appends a content hash to the ConfigMap's
+# name (medicart-config-7f9k2...), so changing any value produces a new
+# name, a changed pod template, and an automatic rolling restart.
+configMapGenerator:
+  - name: medicart-config
+    literals:
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=medicart
+      - DATABASE_USER=medicart
+      - DATABASE_PASSWORD_FILE=/var/run/secrets/medicart/db-password
+      - SESSION_SECRET_FILE=/var/run/secrets/medicart/session-key
+      - METRICS_PORT=9090
+      - LOG_LEVEL=INFO

@@ -1,0 +1,61 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/base/app-gateway-policies.yaml - load balancer settings per Service
+# =============================================================================
+# GKE's Gateway controller reads these "policy attachments" and programs the
+# Google load balancer's backend service for the medicart Service.
+#
+# HealthCheckPolicy: the LB checks /readyz, the same endpoint Kubernetes uses
+# for readiness, so both agree on exactly when a pod may take traffic.
+# (The default, "GET /", would pass during startup and break the day "/"
+# needs a login.)
+apiVersion: networking.gke.io/v1
+kind: HealthCheckPolicy
+metadata:
+  name: medicart
+  labels:
+    app.kubernetes.io/name: medicart
+spec:
+  default:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 1
+    unhealthyThreshold: 3
+    config:
+      type: HTTP
+      httpHealthCheck:
+        requestPath: /readyz
+  targetRef:
+    group: ""
+    kind: Service
+    name: medicart
+---
+# GCPBackendPolicy:
+#   securityPolicy  - attaches the Cloud Armor policy you created in the
+#                     console: WAF rules (SQL injection, XSS) and a
+#                     rate-based ban on /login, enforced at Google's edge
+#                     before a request ever reaches a pod.
+#   logging         - LB request logs, including WHICH Cloud Armor rule
+#                     allowed or blocked each request (Logs Explorer).
+#   connectionDraining - on scale-down/rollout, in-flight requests get 30s
+#                     to finish before the LB drops the endpoint.
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: medicart
+  labels:
+    app.kubernetes.io/name: medicart
+spec:
+  default:
+    securityPolicy: medicart-armor
+    timeoutSec: 30
+    connectionDraining:
+      drainingTimeoutSec: 30
+    logging:
+      enabled: true
+      sampleRate: 1000000 # 100% - traffic is tiny; lower it for real volumes
+  targetRef:
+    group: ""
+    kind: Service
+    name: medicart

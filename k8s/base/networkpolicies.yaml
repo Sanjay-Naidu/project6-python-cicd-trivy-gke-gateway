@@ -1,0 +1,111 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/base/networkpolicies.yaml - zero-trust networking in the namespace
+# =============================================================================
+# Enforced by GKE Dataplane V2 (eBPF). Model: deny everything, then allow
+# exactly the flows the app needs:
+#
+#   Internet -> Google LB (35.191.0.0/16, 130.211.0.0/22) -> medicart:8080
+#   medicart -> postgres:5432
+#   every pod -> kube-dns:53
+#   in-cluster Prometheus (gmp-system) -> medicart:9090
+#
+# Nothing else in or out. A compromised app pod cannot reach the internet,
+# the metadata server, other namespaces, or anything but its own database.
+# (Kubelet probes come from the node itself, which Dataplane V2 always
+# allows.)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+spec:
+  podSelector: {}
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: medicart-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: medicart
+  policyTypes: ["Ingress"]
+  ingress:
+    # Google Front Ends and LB health checkers. With container-native load
+    # balancing they connect straight to the pod IP, so forgetting these two
+    # ranges takes the site down while every pod still looks healthy.
+    - from:
+        - ipBlock:
+            cidr: 35.191.0.0/16
+        - ipBlock:
+            cidr: 130.211.0.0/22
+      ports:
+        - port: 8080
+          protocol: TCP
+    # Managed Service for Prometheus collectors, for the metrics port only.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gmp-system
+      ports:
+        - port: 9090
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: medicart-egress-to-postgres
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: medicart
+  policyTypes: ["Egress"]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: medicart
+      ports:
+        - port: 5432
+          protocol: TCP

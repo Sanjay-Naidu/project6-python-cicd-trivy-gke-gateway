@@ -1,0 +1,51 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : platform/00-namespaces.yaml - namespaces + Pod Security Admission
+# =============================================================================
+# PLATFORM layer: applied ONCE by a cluster admin (you, in Cloud Shell), not
+# by the pipeline. The CI service account can deploy INTO these namespaces
+# but never creates or relabels them. That split mirrors real platform
+# teams: they own the guardrails, app teams own what runs inside.
+#
+# pod-security.kubernetes.io/enforce: restricted
+#   The API server itself REJECTS any pod that runs as root, allows
+#   privilege escalation, keeps Linux capabilities, or skips seccomp. It's a
+#   guardrail that holds even if someone edits a manifest carelessly.
+#
+# gateway-access: "true"
+#   Only namespaces with this label may attach routes to the shared Gateway
+#   (see 20-gateway-http.yaml). A new namespace can't publish itself to the
+#   internet by accident.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: medicart-dev
+  labels:
+    app.kubernetes.io/part-of: medicart
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    gateway-access: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: medicart-prod
+  labels:
+    app.kubernetes.io/part-of: medicart
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/warn: restricted
+    gateway-access: "true"
+---
+# Holds only the shared Gateway (and the HTTP->HTTPS redirect route). No
+# workloads run here.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gateway-infra
+  labels:
+    app.kubernetes.io/part-of: medicart
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

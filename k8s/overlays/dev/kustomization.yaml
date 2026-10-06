@@ -1,0 +1,28 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/overlays/dev/kustomization.yaml - dev environment
+# =============================================================================
+# Dev priorities: cheap and fast feedback. One app pod, a small disk, no HPA
+# or PDB. Reached at dev.<your-domain> through the SAME shared Gateway as
+# prod (one load balancer, host-based routing).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: medicart-dev
+
+resources:
+  - ../../base
+
+labels:
+  - pairs:
+      app.kubernetes.io/environment: dev
+    includeSelectors: false
+    includeTemplates: true
+
+configMapGenerator:
+  - name: medicart-config
+    behavior: merge
+    literals:
+      - APP_ENVIRONMENT=dev
+      - LOG_LEVEL=DEBUG

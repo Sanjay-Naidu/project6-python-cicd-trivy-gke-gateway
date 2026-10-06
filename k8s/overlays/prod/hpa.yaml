@@ -1,0 +1,35 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/overlays/prod/hpa.yaml - scale the web tier on CPU
+# =============================================================================
+# Max 4 is set by the database, not the nodes: 4 pods x 10 pooled
+# connections = 40 of PostgreSQL's max_connections=60. Scaling the web tier
+# past what the database accepts just moves the failure downstream.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: medicart
+  labels:
+    app.kubernetes.io/name: medicart
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: medicart
+  minReplicas: 2
+  maxReplicas: 4
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 30
+    scaleDown:
+      # Wait 5 minutes of low load before removing pods: avoids flapping
+      # when traffic is bursty.
+      stabilizationWindowSeconds: 300

@@ -1,0 +1,44 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : platform/10-storage.yaml - StorageClass + VolumeSnapshotClass
+# =============================================================================
+# The PostgreSQL StatefulSet asks for a PersistentVolumeClaim of class
+# "medicart-pd". The GKE Persistent Disk CSI driver then creates a real
+# Compute Engine persistent disk and attaches it to whichever node runs the
+# database pod. If the pod moves to another node, the disk moves with it.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: medicart-pd
+  labels:
+    app.kubernetes.io/part-of: medicart
+provisioner: pd.csi.storage.gke.io
+parameters:
+  # pd-balanced: SSD-backed, ~3x the IOPS of pd-standard for 2.5x the price
+  # (~$0.10/GB-month). The right default for a database; the cluster's boot
+  # disks stay on cheap pd-standard.
+  type: pd-balanced
+# Retain: deleting the PVC (or the whole namespace) does NOT delete the disk.
+# Losing patient orders to a typo in `kubectl delete` is not an option. The
+# price: teardown must delete leftover disks by hand (docs/SETUP.md, Phase 15).
+reclaimPolicy: Retain
+# Grow a volume by editing the PVC's size; the CSI driver resizes the disk
+# and the filesystem online. (Disks can grow, never shrink.)
+allowVolumeExpansion: true
+# Create the disk only once the pod is scheduled, in THAT pod's zone. With
+# Immediate binding the disk could land in a zone where the pod can't run.
+volumeBindingMode: WaitForFirstConsumer
+---
+# Point-in-time disk snapshots through the Kubernetes API (VolumeSnapshot
+# objects). Used by the backup/restore drill in docs/OPERATIONS.md.
+apiVersion: snapshot.storage.k8s.io/v1
+kind: VolumeSnapshotClass
+metadata:
+  name: medicart-snapshots
+  labels:
+    app.kubernetes.io/part-of: medicart
+driver: pd.csi.storage.gke.io
+# Delete: removing the VolumeSnapshot object also removes the Compute Engine
+# snapshot, so nothing keeps billing after teardown.
+deletionPolicy: Delete

@@ -1,0 +1,23 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/overlays/prod/pdb.yaml - survive voluntary disruptions
+# =============================================================================
+# GKE auto-upgrades and the cluster autoscaler drain nodes. This budget makes
+# them evict app pods one at a time, always leaving at least one serving.
+#
+# Deliberately NO PodDisruptionBudget for postgres: with a single replica,
+# minAvailable: 1 would block every node drain (GKE waits up to an hour and
+# then evicts anyway). One replica can't be made highly available by a
+# budget; that needs replication (see the README roadmap).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: medicart
+  labels:
+    app.kubernetes.io/name: medicart
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: medicart

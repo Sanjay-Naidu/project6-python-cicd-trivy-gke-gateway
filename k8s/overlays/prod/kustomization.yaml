@@ -1,0 +1,68 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/overlays/prod/kustomization.yaml - prod environment
+# =============================================================================
+# Prod priorities: availability. 2-4 app pods spread across nodes, an HPA for
+# load spikes, a PDB so node drains and GKE auto-upgrades never take the app
+# to zero, and a bigger database disk.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: medicart-prod
+
+resources:
+  - ../../base
+  - hpa.yaml
+  - pdb.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/environment: prod
+    includeSelectors: false
+    includeTemplates: true
+
+configMapGenerator:
+  - name: medicart-config
+    behavior: merge
+    literals:
+      - APP_ENVIRONMENT=prod
+
+patches:
+  # The HPA owns the replica count in prod. If the manifest ALSO set
+  # `replicas`, every deploy would reset the Deployment to that number and
+  # fight the autoscaler (e.g. drop from 4 pods to 1 mid-spike).
+  - target:
+      kind: Deployment
+      name: medicart
+    patch: |-
+      - op: remove
+        path: /spec/replicas
+
+  # Prefer one app pod per node, so losing a node never takes out both.
+  # ScheduleAnyway: if the autoscaler has shrunk to one node, still deploy.
+  - target:
+      kind: Deployment
+      name: medicart
+    patch: |-
+      - op: add
+        path: /spec/template/spec/topologySpreadConstraints
+        value:
+          - maxSkew: 1
+            topologyKey: kubernetes.io/hostname
+            whenUnsatisfiable: ScheduleAnyway
+            labelSelector:
+              matchLabels:
+                app.kubernetes.io/name: medicart
+
+  # 10 GiB for prod data. NOTE: volumeClaimTemplates are immutable once the
+  # StatefulSet exists. To grow later, edit the PVC itself
+  # (kubectl -n medicart-prod edit pvc data-postgres-0); the StorageClass
+  # allows online expansion.
+  - target:
+      kind: StatefulSet
+      name: postgres
+    patch: |-
+      - op: replace
+        path: /spec/volumeClaimTemplates/0/spec/resources/requests/storage
+        value: 10Gi

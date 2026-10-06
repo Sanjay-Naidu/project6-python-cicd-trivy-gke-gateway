@@ -1,0 +1,159 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/base/app-deployment.yaml - the MediCart web tier
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: medicart
+  labels:
+    app.kubernetes.io/name: medicart
+    app.kubernetes.io/component: web
+spec:
+  replicas: 1 # prod removes this field and lets the HPA own it
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: medicart
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # Zero-downtime: never remove a pod before its replacement is Ready
+      # (and, through the NEG readiness gate, healthy in the load balancer).
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: medicart
+        app.kubernetes.io/component: web
+      annotations:
+        # emptyDir /tmp holds nothing worth keeping; without this the
+        # cluster autoscaler refuses to drain the node to scale down.
+        cluster-autoscaler.kubernetes.io/safe-to-evict-local-volumes: "tmp"
+    spec:
+      serviceAccountName: medicart
+      automountServiceAccountToken: false
+      # Budget: preStop 10s + uvicorn graceful shutdown 20s < 45s.
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Schema migrations run BEFORE the app container can start (see
+      # app/src/medicart/migrate.py): new code never meets an old schema.
+      # On a brand-new environment this also waits for PostgreSQL to finish
+      # initdb, so there's no crash loop while the database comes up.
+      initContainers:
+        - name: migrate
+          image: ${APP_IMAGE}
+          command: ["/app/.venv/bin/python", "-m", "medicart.migrate"]
+          envFrom:
+            - configMapRef:
+                name: medicart-config
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi
+          volumeMounts:
+            - name: secrets
+              mountPath: /var/run/secrets/medicart
+              readOnly: true
+
+      containers:
+        - name: medicart
+          image: ${APP_IMAGE}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: medicart-config
+          env:
+            # Shown in the page footer and /api/info: proves which build is
+            # live. The pipeline's final check depends on it.
+            - name: APP_VERSION
+              value: "${APP_VERSION}"
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            # http or https: how users reach the site. A direct env var (not
+            # in the ConfigMap) so flipping it changes the pod template and
+            # rolls the pods. (A string on purpose: a bare true/false would
+            # become a YAML boolean after substitution and be rejected.)
+            - name: PUBLIC_SCHEME
+              value: "${PUBLIC_SCHEME}"
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30 # up to 60s to start
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          lifecycle:
+            preStop:
+              # Keep serving for 10s after termination starts, while the load
+              # balancer and kube-proxy stop sending new requests here. Native
+              # sleep action: distroless has no shell for `sleep`.
+              sleep:
+                seconds: 10
+          # Memory limit, no CPU limit. Memory is incompressible (exceed it
+          # and the pod is OOM-killed, so it must be bounded); CPU is not,
+          # and a CPU limit only adds throttling latency on a busy node.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              memory: 384Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: secrets
+              mountPath: /var/run/secrets/medicart
+              readOnly: true
+
+      volumes:
+        # Writable scratch space: the root filesystem is read-only.
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: secrets
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: medicart-app-secrets

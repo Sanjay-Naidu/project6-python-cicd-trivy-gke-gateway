@@ -1,0 +1,53 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : platform/21-gateway-https.yaml - add HTTPS next to HTTP (stage 2)
+# =============================================================================
+# Apply this INSTEAD of 20-gateway-http.yaml once the Google-managed
+# certificate "medicart-cert" exists (docs/SETUP.md, Phase 13). Same Gateway
+# name, so `kubectl apply` updates the existing load balancer in place.
+#
+# WHY two HTTPS stages: a Google-managed certificate is only issued once it
+# is attached to a load balancer that its domains point at, which takes
+# 15-60 minutes. During that time HTTPS can't work yet, so HTTP must keep
+# serving the site. This stage serves BOTH; stage 3
+# (22-gateway-https-redirect.yaml) turns HTTP into a redirect once the
+# certificate is ACTIVE. Zero downtime.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: medicart-gateway
+  namespace: gateway-infra
+  labels:
+    app.kubernetes.io/part-of: medicart
+spec:
+  gatewayClassName: gke-l7-global-external-managed
+  addresses:
+    - type: NamedAddress
+      value: medicart-ip
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              gateway-access: "true"
+    - name: https
+      protocol: HTTPS
+      port: 443
+      tls:
+        mode: Terminate
+        options:
+          # A classic Google-managed SSL certificate created in the console
+          # (Load balancing -> Certificates). Google issues and renews it
+          # automatically once DNS for its domains points at medicart-ip.
+          networking.gke.io/pre-shared-certs: medicart-cert
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              gateway-access: "true"

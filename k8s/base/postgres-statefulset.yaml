@@ -1,0 +1,155 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : k8s/base/postgres-statefulset.yaml - PostgreSQL 18 on a persistent disk
+# =============================================================================
+# WHY a StatefulSet (not a Deployment):
+#   - stable identity: the pod is always postgres-0, reachable at a stable
+#     DNS name through the headless Service;
+#   - volumeClaimTemplates: postgres-0 always gets back THE SAME disk
+#     (PVC data-postgres-0), whichever node it lands on after a reschedule;
+#   - ordered, one-at-a-time updates: never two postgres processes on one
+#     data directory.
+#
+# Honest scope note: this is ONE replica with no automatic failover. If the
+# node dies, Kubernetes reschedules the pod and re-attaches the disk (~1-2
+# min of downtime); the disk survives. For production HA see the README
+# roadmap (Cloud SQL, or the CloudNativePG operator with streaming replicas).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+  # Keep the PVC (and disk) even if the StatefulSet is deleted or scaled to 0.
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+      annotations:
+        # Don't let the cluster autoscaler move the database just to save
+        # a node: that is a minute of downtime for a few cents.
+        cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
+    spec:
+      serviceAccountName: postgres
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        # UID/GID 70 = "postgres" in the official Alpine image.
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        # The disk's root is chowned to GID 70 on mount so postgres can
+        # write to it. OnRootMismatch: only walk the tree when the root is
+        # wrong, not on every restart of a large volume.
+        fsGroup: 70
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          # Official image, pulled through the Artifact Registry remote
+          # repository (a Docker Hub mirror) - the nodes have no internet
+          # access at all. Tag AND digest are pinned in one place: the
+          # POSTGRES_IMAGE_REF value in .github/workflows/build-and-deploy.yml.
+          image: ${POSTGRES_IMAGE}
+          args:
+            - "-c"
+            - "max_connections=60" # 4 app pods x 10 pool + headroom (see db.py)
+            - "-c"
+            - "shared_buffers=128MB"
+            - "-c"
+            - "log_min_duration_statement=500" # log queries slower than 500 ms
+          env:
+            - name: POSTGRES_USER
+              value: medicart
+            - name: POSTGRES_DB
+              value: medicart
+            - name: POSTGRES_PASSWORD_FILE
+              value: /var/run/secrets/medicart/db-password
+            # PostgreSQL 18 images keep data in a version-specific
+            # subdirectory, so a future major upgrade can sit next to it.
+            - name: PGDATA
+              value: /var/lib/postgresql/18/docker
+          ports:
+            - name: postgres
+              containerPort: 5432
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "medicart", "-d", "medicart"]
+            periodSeconds: 5
+            failureThreshold: 60 # first boot runs initdb
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "medicart", "-d", "medicart"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "medicart", "-d", "medicart"]
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+          lifecycle:
+            preStop:
+              # "fast" shutdown: roll back open transactions, checkpoint,
+              # exit cleanly. PostgreSQL's reaction to plain SIGTERM ("smart")
+              # waits for every client to disconnect, and the app's pool
+              # never does, so the pod would be SIGKILLed mid-write.
+              exec:
+                command: ["/bin/sh", "-c", "pg_ctl stop -D \"$PGDATA\" -m fast -w -t 45"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+            - name: run
+              mountPath: /var/run/postgresql
+            - name: tmp
+              mountPath: /tmp
+            - name: secrets
+              mountPath: /var/run/secrets/medicart
+              readOnly: true
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: secrets
+          csi:
+            driver: secrets-store-gke.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: postgres-secrets
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          app.kubernetes.io/name: postgres
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: medicart-pd
+        resources:
+          requests:
+            storage: 5Gi # prod overlay raises this
