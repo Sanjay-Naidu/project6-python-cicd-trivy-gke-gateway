@@ -1,0 +1,37 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : .gitignore
+# =============================================================================
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Test / lint output
+.pytest_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Rendered manifests (CI artifacts, never committed)
+rendered/
+*.rendered.yaml
+
+# Secrets - should never exist in this repo, but just in case
+.env
+*.env
+*-key.json
+*.pem
+credentials.json
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

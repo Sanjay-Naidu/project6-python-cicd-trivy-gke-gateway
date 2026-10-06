@@ -1,0 +1,15 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | registration -#}
+{% extends "base.html" %}
+{% block title %}Sign up{% endblock %}
+{% block content %}
+<form action="/register" method="post" class="panel form narrow">
+  <h1>Create your account</h1>
+  {% if error %}<p class="flash flash-error">{{ error }}</p>{% endif %}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  <label>Full name <input name="full_name" value="{{ form.full_name | default('') }}" maxlength="120" autocomplete="name" required></label>
+  <label>Email <input type="email" name="email" value="{{ form.email | default('') }}" autocomplete="email" required></label>
+  <label>Password <input type="password" name="password" minlength="10" autocomplete="new-password" required></label>
+  <p class="muted small">At least 10 characters. Use a made-up email: this is a demo.</p>
+  <button class="btn" type="submit">Sign up</button>
+</form>
+{% endblock %}

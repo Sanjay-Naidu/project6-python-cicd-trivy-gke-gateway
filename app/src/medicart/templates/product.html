@@ -1,0 +1,28 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | product detail -#}
+{% extends "base.html" %}
+{% block title %}{{ product.name }}{% endblock %}
+{% block content %}
+<p><a href="/?category={{ product.category | urlencode }}">← {{ product.category }}</a></p>
+<div class="panel product">
+  <div class="card-icon card-icon-large cat-{{ product.category | lower | replace(' ', '-') | replace('&', 'and') }}">{{ product.name[0] }}</div>
+  <div>
+    <h1>{{ product.name }}</h1>
+    <p>{{ product.description }}</p>
+    {% if product.requires_prescription %}
+      <p class="badge badge-rx">Prescription required. At checkout you'll give your prescriber's name and the Rx number, and a pharmacist reviews the order before it ships.</p>
+    {% endif %}
+    <p class="price">{{ product.price_cents | money }}</p>
+    {% if product.stock > 0 %}
+    <form action="/cart/add" method="post" class="row">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="product_id" value="{{ product.id }}">
+      <label>Qty <input type="number" name="quantity" value="1" min="1" max="10" class="qty"></label>
+      <button class="btn" type="submit">Add to cart</button>
+    </form>
+    <p class="muted small">{{ product.stock }} in stock</p>
+    {% else %}
+    <p class="muted">Out of stock</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

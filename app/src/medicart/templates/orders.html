@@ -1,0 +1,24 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | order history -#}
+{% extends "base.html" %}
+{% block title %}My orders{% endblock %}
+{% block content %}
+<h1>My orders</h1>
+{% if orders %}
+<table class="table">
+  <thead><tr><th>Order</th><th>Placed</th><th>Items</th><th>Status</th><th class="right">Total</th></tr></thead>
+  <tbody>
+  {% for o in orders %}
+    <tr>
+      <td><a href="/orders/{{ o.id }}">#{{ o.id }}</a></td>
+      <td>{{ o.created_at.strftime('%d %b %Y %H:%M') }}</td>
+      <td>{{ o.items | length }}</td>
+      <td><span class="status status-{{ o.status }}">{{ o.status | replace('_', ' ') }}</span></td>
+      <td class="right">{{ o.total_cents | money }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="muted">No orders yet. <a href="/">Start shopping</a>.</p>
+{% endif %}
+{% endblock %}

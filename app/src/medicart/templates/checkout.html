@@ -1,0 +1,26 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | checkout -#}
+{% extends "base.html" %}
+{% block title %}Checkout{% endblock %}
+{% block content %}
+<h1>Checkout</h1>
+<div class="panel">
+  <ul class="plain">
+    {% for p, qty in lines %}
+      <li>{{ qty }} × {{ p.name }} <span class="muted">{{ (p.price_cents * qty) | money }}</span></li>
+    {% endfor %}
+  </ul>
+  <p class="price">Total {{ total_cents | money }}</p>
+</div>
+
+<form action="/checkout" method="post" class="panel form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+  {% if needs_rx %}
+    <h2>Prescription details</h2>
+    <p class="muted small">Needed for the Rx items in your order. A pharmacist verifies these before dispatch.</p>
+    <label>Prescriber's name <input name="prescriber_name" maxlength="120" required></label>
+    <label>Rx number <input name="rx_number" maxlength="40" required></label>
+  {% endif %}
+  <p class="muted small">Demo checkout: no payment is taken.</p>
+  <button class="btn" type="submit">Place order</button>
+</form>
+{% endblock %}

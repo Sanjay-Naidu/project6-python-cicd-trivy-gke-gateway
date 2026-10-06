@@ -1,0 +1,29 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | pharmacist review queue -#}
+{% extends "base.html" %}
+{% block title %}Review queue{% endblock %}
+{% block content %}
+<div class="row spread">
+  <h1>Prescription review queue</h1>
+  <a href="/pharmacy/audit">Audit trail →</a>
+</div>
+{% for o in orders %}
+<article class="panel">
+  <div class="row spread">
+    <h2><a href="/orders/{{ o.id }}">Order #{{ o.id }}</a></h2>
+    <span class="muted small">{{ o.user.full_name }} · {{ o.created_at.strftime('%d %b %H:%M') }}</span>
+  </div>
+  <ul class="plain">
+    {% for i in o.items %}<li>{{ i.quantity }} × {{ i.product_name }}{% if i.requires_prescription %} <span class="badge badge-rx">Rx</span>{% endif %}</li>{% endfor %}
+  </ul>
+  <p><strong>Prescriber:</strong> {{ o.prescriber_name }} · <strong>Rx number:</strong> {{ o.rx_number }}</p>
+  <form action="/pharmacy/orders/{{ o.id }}/review" method="post" class="row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+    <input name="note" placeholder="Note to patient (required to reject)" maxlength="1000" class="grow">
+    <button class="btn" name="decision" value="approve" type="submit">Approve</button>
+    <button class="btn btn-danger" name="decision" value="reject" type="submit">Reject</button>
+  </form>
+</article>
+{% else %}
+<p class="muted">Nothing waiting for review.</p>
+{% endfor %}
+{% endblock %}

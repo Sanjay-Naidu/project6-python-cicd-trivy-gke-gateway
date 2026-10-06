@@ -1,0 +1,28 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | order detail -#}
+{% extends "base.html" %}
+{% block title %}Order #{{ order.id }}{% endblock %}
+{% block content %}
+<h1>Order #{{ order.id }} <span class="status status-{{ order.status }}">{{ order.status | replace('_', ' ') }}</span></h1>
+{% if order.status == 'pending_review' %}
+  <p class="flash flash-info">A pharmacist is checking your prescription. We'll dispatch as soon as it's approved.</p>
+{% elif order.status == 'rejected' %}
+  <p class="flash flash-error">Your order was not approved{% if order.review_note %}: {{ order.review_note }}{% endif %}. Nothing will be dispatched.</p>
+{% endif %}
+<table class="table">
+  <thead><tr><th>Item</th><th>Price</th><th>Qty</th><th class="right">Total</th></tr></thead>
+  <tbody>
+  {% for i in order.items %}
+    <tr>
+      <td>{{ i.product_name }}{% if i.requires_prescription %} <span class="badge badge-rx">Rx</span>{% endif %}</td>
+      <td>{{ i.unit_price_cents | money }}</td>
+      <td>{{ i.quantity }}</td>
+      <td class="right">{{ i.line_total_cents | money }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+  <tfoot><tr><th colspan="3">Total</th><th class="right">{{ order.total_cents | money }}</th></tr></tfoot>
+</table>
+{% if order.rx_number %}<p class="muted small">Prescriber: {{ order.prescriber_name }} · Rx {{ order.rx_number }}</p>{% endif %}
+<p class="muted small">Placed {{ order.created_at.strftime('%d %b %Y %H:%M UTC') }} · processed by pod <code>{{ app_info.pod_name }}</code></p>
+<a href="/orders">← All orders</a>
+{% endblock %}

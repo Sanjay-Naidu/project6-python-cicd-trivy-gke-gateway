@@ -1,0 +1,15 @@
+# =============================================================================
+# Project : Project 6 - Python (FastAPI) App CI/CD on Google GKE
+# Author  : Sanjay Naidu
+# File    : .gitattributes - consistent line endings across Windows/Linux
+# =============================================================================
+# Scripts run in Cloud Shell (Linux): a CRLF line ending turns
+# `set -euo pipefail` into "invalid option" errors. Force LF for them.
+* text=auto
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.py   text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+Dockerfile text eol=lf

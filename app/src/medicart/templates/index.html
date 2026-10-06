@@ -1,0 +1,45 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | catalog -#}
+{% extends "base.html" %}
+{% block title %}Shop{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>Everyday medicines, delivered.</h1>
+  <p>Over-the-counter essentials ship straight away. Prescription items are checked by a registered pharmacist before we dispatch.</p>
+</section>
+
+<nav class="categories" aria-label="Categories">
+  <a href="/" class="chip {% if not category %}chip-active{% endif %}">All</a>
+  {% for c in categories %}
+    <a href="/?category={{ c | urlencode }}" class="chip {% if c == category %}chip-active{% endif %}">{{ c }}</a>
+  {% endfor %}
+</nav>
+
+{% if q %}<p class="muted">Results for “{{ q }}”: {{ products | length }}</p>{% endif %}
+
+<div class="grid">
+  {% for p in products %}
+  <article class="card">
+    <div class="card-icon cat-{{ p.category | lower | replace(' ', '-') | replace('&', 'and') }}">{{ p.name[0] }}</div>
+    <div class="card-body">
+      <a class="card-title" href="/products/{{ p.id }}">{{ p.name }}</a>
+      <p class="muted small">{{ p.category }}</p>
+      {% if p.requires_prescription %}<span class="badge badge-rx">Rx: prescription required</span>{% endif %}
+    </div>
+    <div class="card-foot">
+      <strong>{{ p.price_cents | money }}</strong>
+      {% if p.stock > 0 %}
+      <form action="/cart/add" method="post">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+        <input type="hidden" name="product_id" value="{{ p.id }}">
+        <button class="btn btn-small" type="submit">Add</button>
+      </form>
+      {% else %}
+      <span class="muted small">Out of stock</span>
+      {% endif %}
+    </div>
+  </article>
+  {% else %}
+  <p class="muted">No products found.</p>
+  {% endfor %}
+</div>
+{% endblock %}

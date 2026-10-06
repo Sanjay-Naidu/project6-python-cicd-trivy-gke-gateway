@@ -1,0 +1,34 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | cart -#}
+{% extends "base.html" %}
+{% block title %}Cart{% endblock %}
+{% block content %}
+<h1>Your cart</h1>
+{% if lines %}
+<table class="table">
+  <thead><tr><th>Item</th><th>Price</th><th>Qty</th><th class="right">Total</th></tr></thead>
+  <tbody>
+  {% for p, qty in lines %}
+    <tr>
+      <td><a href="/products/{{ p.id }}">{{ p.name }}</a>{% if p.requires_prescription %} <span class="badge badge-rx">Rx</span>{% endif %}</td>
+      <td>{{ p.price_cents | money }}</td>
+      <td>
+        <form action="/cart/update" method="post" class="row">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <input type="hidden" name="product_id" value="{{ p.id }}">
+          <input type="number" name="quantity" value="{{ qty }}" min="0" max="{{ max_qty }}" class="qty" aria-label="Quantity">
+          <button class="btn btn-small btn-ghost" type="submit">Update</button>
+        </form>
+      </td>
+      <td class="right">{{ (p.price_cents * qty) | money }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+  <tfoot><tr><th colspan="3">Total</th><th class="right">{{ total_cents | money }}</th></tr></tfoot>
+</table>
+{% if needs_rx %}<p class="badge badge-rx">Your cart has prescription items. A pharmacist reviews the order before it ships.</p>{% endif %}
+<p class="muted small">Set a quantity to 0 to remove an item.</p>
+<a class="btn" href="/checkout">Checkout</a>
+{% else %}
+<p class="muted">Your cart is empty. <a href="/">Browse the shop</a>.</p>
+{% endif %}
+{% endblock %}

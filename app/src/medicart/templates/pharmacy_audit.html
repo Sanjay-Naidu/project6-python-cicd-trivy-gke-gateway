@@ -1,0 +1,26 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | audit trail -#}
+{% extends "base.html" %}
+{% block title %}Audit trail{% endblock %}
+{% block content %}
+<div class="row spread">
+  <h1>Audit trail</h1>
+  <a href="/pharmacy">← Review queue</a>
+</div>
+<p class="muted small">Latest 100 events. The table is append-only: a database trigger rejects every UPDATE and DELETE.</p>
+<table class="table small">
+  <thead><tr><th>#</th><th>When (UTC)</th><th>Action</th><th>Actor</th><th>Entity</th><th>Detail</th><th>Source IP</th></tr></thead>
+  <tbody>
+  {% for e in events %}
+    <tr>
+      <td>{{ e.id }}</td>
+      <td>{{ e.occurred_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+      <td><code>{{ e.action }}</code></td>
+      <td>{{ e.actor.email if e.actor else '-' }}</td>
+      <td>{{ e.entity }}{% if e.entity_id %} {{ e.entity_id }}{% endif %}</td>
+      <td>{% for k, v in e.detail.items() %}{{ k }}={{ v }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+      <td>{{ e.source_ip or '-' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

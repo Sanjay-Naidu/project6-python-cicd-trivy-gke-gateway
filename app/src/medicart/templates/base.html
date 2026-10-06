@@ -1,0 +1,45 @@
+{#- Project 6 - MediCart | Author: Sanjay Naidu | base layout -#}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}MediCart{% endblock %} · MediCart</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="demo-banner">Portfolio demo. Not a real pharmacy: nothing is sold or shipped, and no real patient data should be entered.</div>
+  <header class="topbar">
+    <a class="brand" href="/"><span class="brand-mark">+</span> MediCart</a>
+    <form class="search" action="/" method="get" role="search">
+      <input type="search" name="q" placeholder="Search medicines…" value="{{ q | default('') }}" aria-label="Search">
+    </form>
+    <nav class="nav">
+      <a href="/cart">Cart{% if cart_count %} <span class="pill">{{ cart_count }}</span>{% endif %}</a>
+      {% if user %}
+        <a href="/orders">My orders</a>
+        {% if user.is_pharmacist %}<a href="/pharmacy">Pharmacist</a>{% endif %}
+        <form action="/logout" method="post" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+          <button class="link" type="submit">Log out ({{ user.full_name.split(' ')[0] }})</button>
+        </form>
+      {% else %}
+        <a href="/login">Log in</a>
+        <a class="btn btn-small" href="/register">Sign up</a>
+      {% endif %}
+    </nav>
+  </header>
+
+  <main class="container">
+    {% for f in flashes %}
+      <div class="flash flash-{{ f.kind }}" role="status">{{ f.message }}</div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="footer">
+    <span>MediCart · built by Sanjay Naidu</span>
+    <span class="build">version <code>{{ app_info.version }}</code> · env <code>{{ app_info.environment }}</code> · pod <code>{{ app_info.pod_name }}</code></span>
+  </footer>
+</body>
+</html>
