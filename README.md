@@ -253,6 +253,12 @@ uv run python -m medicart.migrate && uv run python -m medicart     # http://loca
 
 **A test that hung for two minutes exposed a production bug.** The "database is down" test pointed the app at a dead port. On Linux that's refused instantly, but on my Windows laptop the connection was silently dropped, and libpq **has no connect timeout by default**. The same thing happens in a cluster when a DB node vanishes: every request thread waits until the load balancer gives up. The fix was `connect_timeout=3` on the engine and in the migration waiter. A slow test was really a missing timeout.
 
+**The Trivy gate blocked the very first image, because of the base image and not my code.** Lint, 49 tests, manifest validation, the build and the image smoke test were all green. Then the blocking scan failed on two **HIGH** CVEs in OpenSSL (`libssl3t64 3.5.7-1~deb13u2`: CVE-2026-75804, a QUIC denial of service, and CVE-2026-84782, DTLS information disclosure). Every Python package scanned clean. The vulnerable library came from the `distroless/python3-debian13` base image, which I had pinned by digest two weeks earlier, and Debian had since shipped `deb13u3` with the fix.
+
+Dependabot had already opened a PR bumping the digest. Before merging it, I pulled the new image's layers from the registry and read its package database: `libssl3t64 3.5.7-1~deb13u3`. The PR's own validation run, Trivy included, was green. Merge, and the pipeline went through. A Python dependency PR opened the same day failed the same gate until the base-image bump landed, so the gate blocks dependency PRs too, not just my changes.
+
+What it taught me: pinning `tag@sha256` makes builds reproducible, but it also freezes whatever vulnerabilities that image has. A pin is only safe as part of a loop: **pin → scan → automated bump PR → scan again**. Take away the scanner or the bot and the pin turns into a liability.
+
 <!-- Add real deployment incidents here as they happen: symptom, root cause, fix, lesson. -->
 
 ---
